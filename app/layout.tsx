@@ -18,7 +18,7 @@ const jetbrainsMono = JetBrains_Mono({
 })
 
 export const metadata: Metadata = {
-  title: "solPVE - PvE runners for the people",
+  title: "solPVE - PvE Runners for the people",
   description: "Daily Over/Under pools for Solana meme-coins",
   generator: "v0.app",
 }

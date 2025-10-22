@@ -12,6 +12,7 @@ Decentralized prediction markets for Solana token price movements. Users bet on 
 
 ### Installation
 
+#### Local Development
 ```bash
 # 1. Clone and install
 git clone <your-repo>
@@ -19,7 +20,7 @@ cd SOLPVE
 npm install
 
 # 2. Setup environment
-cp .env.example .env
+cp env.example .env
 # Edit .env and add your DATABASE_URL
 
 # 3. Initialize database
@@ -31,7 +32,16 @@ npm run db:seed       # Populate test data
 npm run dev
 ```
 
-Visit **http://localhost:3004** (or whichever port is assigned)
+Visit **http://localhost:3000** (or whichever port is assigned)
+
+#### Replit Deployment
+See **[REPLIT_SETUP.md](./REPLIT_SETUP.md)** for detailed Replit deployment instructions.
+
+**Quick Replit Setup:**
+1. Import repo to Replit
+2. Add environment variables in Secrets tab (see `env.example`)
+3. Run: `npm install && npm run db:migrate && npm run db:seed`
+4. Click "Run"
 
 ### Building & Deploying the Solana Program (Optional)
 

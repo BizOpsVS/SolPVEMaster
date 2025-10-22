@@ -133,7 +133,7 @@ export default async function HomePage() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-8">
               <h1 className="text-2xl font-bold tracking-tight">solPVE</h1>
-              <p className="text-sm text-muted-foreground hidden md:block">solpve.com — PvE runners for the people</p>
+              <p className="text-sm text-muted-foreground hidden md:block">PVE Runners for the people</p>
             </div>
             <WalletDisplay />
           </div>

@@ -1,31 +1,93 @@
-export type Side = "Over" | "Under"
-export type Status = "OPEN" | "LOCKED" | "RESOLVED" | "VOID"
+export type Side = "OVER" | "UNDER"
+export type Status = "OPEN" | "LOCKED" | "RESOLVED" | "SETTLED" | "ADMIN_REVIEW" | "REFUND"
+export type Duration = "10m" | "30m" | "1h" | "6h" | "12h"
 
-export interface Totals {
-  over: number // lamports
-  under: number // lamports
+export interface OracleTrace {
+  src: string
+  price: number
+  ts: string
+  ok: boolean
 }
 
-export interface AIChipData {
-  confidence: number // 0..1
-  model: string // e.g., "pve-v0.3.0"
-  commit: string // hex sha256, e.g., "0xA1B...7C"
-  payload_url?: string | null
+export interface PriceSnapshot {
+  price: number
+  ts: string
+  sources: OracleTrace[]
+}
+
+export interface AILineContract {
+  line_bps: number // e.g., 300 => +3.00%
+  confidence_pct: number // 0-100
+  model_version: string // e.g., "pve-v0.3"
+  commit: string // sha256-of-run
+  generated_at: string // ISO8601
+}
+
+export interface PoolResult {
+  ret_pct: number
+  line_pct: number
+  winner: Side | "TIE" | null
+  fee_pct: number
+}
+
+export interface PoolPots {
+  over: number
+  under: number
+}
+
+export interface PoolSnapshots {
+  entry: PriceSnapshot
+  exit: PriceSnapshot
 }
 
 export interface PoolListItem {
-  id: number
-  token: string // "BONK"
-  mint: string // mint address
-  logo?: string | null // token logo URL (optional)
-  line_bps: number // e.g., 300 => +3.00%
-  confidence: number // duplicate for card speed
-  lock_ts: number // unix seconds
-  end_ts: number // unix seconds
-  totals: Totals
+  id: string
+  asset_id: string
+  asset_symbol: string
+  currency: string
+  duration: Duration
+  ai: AILineContract
+  start_at: string
+  lock_at: string
+  resolve_at: string
   status: Status
-  pool_type?: 'PvMarket' | 'PvAI'
-  ai: AIChipData // Added ai property to match PoolCard usage
+  pots: PoolPots
+  snapshots?: PoolSnapshots
+  result?: PoolResult
+}
+
+export interface PoolCard {
+  id: string
+  asset_symbol: string
+  duration: Duration
+  status: Status
+  lock_at: string
+  resolve_at: string
+  ai_line_pct: number
+  confidence_pct: number
+  over_pct?: number
+  under_pct?: number
+}
+
+export interface Stake {
+  id: string
+  pool_id: string
+  user_id: string
+  side: Side
+  amount: number
+  created_at: string
+  status: "ACTIVE" | "CANCELLED"
+}
+
+export interface Settlement {
+  id: string
+  pool_id: string
+  user_id: string
+  side: Side
+  stake: number
+  payout: number
+  fee_applied: number
+  tx_ref: string | null
 }
 
 export interface ChartPoint {

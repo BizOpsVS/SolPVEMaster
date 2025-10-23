@@ -19,7 +19,7 @@ export function EntryForm({
   totalOver: number
   totalUnder: number
 }) {
-  const [side, setSide] = useState<Side>("Over")
+  const [side, setSide] = useState<Side>("OVER")
   const [amount, setAmount] = useState("")
   const { toast } = useToast()
   const { state, deductBalance } = useApp()
@@ -30,12 +30,12 @@ export function EntryForm({
   const feeLamports = Math.floor((amountLamports * FEE_BPS) / 10000)
   const netLamports = amountLamports - feeLamports
 
-  const totalWinner = side === "Over" ? totalOver : totalUnder
+  const totalWinner = side === "OVER" ? totalOver : totalUnder
   const estimatedPayout = estimatePayoutWin(
     netLamports,
     totalWinner + netLamports,
-    side === "Over" ? totalOver + netLamports : totalOver,
-    side === "Under" ? totalUnder + netLamports : totalUnder,
+    side === "OVER" ? totalOver + netLamports : totalOver,
+    side === "UNDER" ? totalUnder + netLamports : totalUnder,
   )
 
   // Implied current return multiples (no fees, before your entry)

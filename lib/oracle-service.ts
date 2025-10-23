@@ -1,223 +1,419 @@
 /**
- * Oracle Service
- * Resolves pools, generates proofs, and uploads to Shadow Drive
+ * Oracle Service - Multi-source price fetching with fallbacks
+ * Implements the business rules for robust price snapshots
  */
 
-import crypto from 'crypto'
-import { uploadProof } from './storage-service'
-import { updatePoolResolution, getPoolById, getPriceHistory } from './pool-service'
-import { fetchCurrentPrice, determineWinner, calculatePriceChangeBps } from './price-service'
-import { prisma } from './prisma'
-import type { Side } from '@/types/pve'
+import type { OracleTrace, PriceSnapshot } from '@/types/pve'
 
-export interface ResolutionProofData {
-  pool_id: number
-  token: string
-  mint: string
-  start_ts: number
-  lock_ts: number
-  end_ts: number
-  line_bps: number
-  start_price: number
-  final_price: number
-  price_change_bps: number
-  winner: Side | 'Void'
-  resolved_at: number
-  oracle_version: string
-  price_sources: string[]
-  total_over_lamports: number
-  total_under_lamports: number
+export interface OracleConfig {
+  timeoutMs: number
+  retries: number
+  graceMs: number
+  pauseLimitMs: number
+  epsilon: number
+}
+
+const DEFAULT_CONFIG: OracleConfig = {
+  timeoutMs: 2500,
+  retries: 3,
+  graceMs: 30000,
+  pauseLimitMs: 180000,
+  epsilon: 0.000001
+}
+
+export interface OracleResult {
+  price: number
+  sources: OracleTrace[]
+  ok: boolean
+  error?: string
 }
 
 /**
- * Resolve a pool by fetching final price and determining winner
+ * CoinGecko API - Free tier, no key required
  */
-export async function resolvePool(poolId: number): Promise<{
-  winner: Side | 'Void'
-  proofUrl: string
-  proofHash: string
-}> {
-  // 1. Get pool data
-  const pool = await getPoolById(poolId)
-  if (!pool) {
-    throw new Error(`Pool ${poolId} not found`)
-  }
-
-  if (pool.status !== 'LOCKED') {
-    throw new Error(`Pool ${poolId} is not locked (status: ${pool.status})`)
-  }
-
-  // 2. Get price history
-  const priceHistory = await getPriceHistory(poolId)
-
-  if (priceHistory.length === 0) {
-    throw new Error(`No price history found for pool ${poolId}`)
-  }
-
-  // Get start price (earliest price point)
-  const startPrice = Number(priceHistory[0].price)
-
-  // 3. Fetch final price
-  const finalPriceData = await fetchCurrentPrice(pool.mint)
-  const finalPrice = finalPriceData.price
-
-  // 4. Calculate price change
-  const priceChangeBps = calculatePriceChangeBps(startPrice, finalPrice)
-
-  // 5. Determine winner
-  const winner = determineWinner(startPrice, finalPrice, pool.line_bps)
-
-  // 6. Create proof data
-  const proofData: ResolutionProofData = {
-    pool_id: poolId,
-    token: pool.token,
-    mint: pool.mint,
-    start_ts: pool.start_ts,
-    lock_ts: pool.lock_ts,
-    end_ts: pool.end_ts,
-    line_bps: pool.line_bps,
-    start_price: startPrice,
-    final_price: finalPrice,
-    price_change_bps: priceChangeBps,
-    winner,
-    resolved_at: Math.floor(Date.now() / 1000),
-    oracle_version: 'v1.0.0',
-    price_sources: [finalPriceData.source],
-    total_over_lamports: pool.totals.over,
-    total_under_lamports: pool.totals.under,
-  }
-
-  // 7. Calculate proof hash
-  const proofHash = crypto
-    .createHash('sha256')
-    .update(JSON.stringify(proofData))
-    .digest('hex')
-
-  // 8. Upload proof to Shadow Drive
-  const proofUrl = await uploadProof(poolId, proofData)
-
-  // 9. Update pool in database
-  await updatePoolResolution(poolId, {
-    status: 'RESOLVED',
-    winner,
-    proofHash: `0x${proofHash}`,
-    proofUrl,
-  })
-
-  // 10. Store resolution in resolutions table
-  await prisma.resolution.create({
-    data: {
-      poolId,
-      resolverId: 'oracle-v1',
-      finalPrice,
-      startPrice,
-      priceChangeBps,
-      winnerSide: winner,
-      proofData,
-    },
-  })
-
-  return { winner, proofUrl, proofHash: `0x${proofHash}` }
-}
-
-/**
- * Batch resolve multiple pools
- */
-export async function resolvePools(poolIds: number[]): Promise<void> {
-  for (const poolId of poolIds) {
-    try {
-      const result = await resolvePool(poolId)
-      console.log(`✅ Resolved pool ${poolId}: ${result.winner}`)
-    } catch (error) {
-      console.error(`❌ Failed to resolve pool ${poolId}:`, error)
-    }
-  }
-}
-
-/**
- * Void a pool (cancel/refund)
- */
-export async function voidPool(
-  poolId: number,
-  reason: string
-): Promise<void> {
-  const pool = await getPoolById(poolId)
-  if (!pool) {
-    throw new Error(`Pool ${poolId} not found`)
-  }
-
-  // Create void proof
-  const proofData = {
-    pool_id: poolId,
-    token: pool.token,
-    mint: pool.mint,
-    voided_at: Math.floor(Date.now() / 1000),
-    reason,
-    oracle_version: 'v1.0.0',
-    total_over_lamports: pool.totals.over,
-    total_under_lamports: pool.totals.under,
-  }
-
-  const proofHash = crypto
-    .createHash('sha256')
-    .update(JSON.stringify(proofData))
-    .digest('hex')
-
-  const proofUrl = await uploadProof(poolId, proofData)
-
-  await updatePoolResolution(poolId, {
-    status: 'VOID',
-    winner: 'Void',
-    proofHash: `0x${proofHash}`,
-    proofUrl,
-  })
-
-  await prisma.resolution.create({
-    data: {
-      poolId,
-      resolverId: 'oracle-v1-void',
-      finalPrice: 0,
-      startPrice: 0,
-      priceChangeBps: 0,
-      winnerSide: 'Void',
-      proofData,
-    },
-  })
-
-  console.log(`Pool ${poolId} voided: ${reason}`)
-}
-
-/**
- * Verify a resolution proof
- */
-export async function verifyProof(
-  poolId: number,
-  proofUrl: string,
-  expectedHash: string
-): Promise<boolean> {
+async function fetchCoingecko(assetId: string): Promise<OracleResult> {
   try {
-    // Fetch proof from URL
-    const response = await fetch(proofUrl)
+    const response = await fetch(
+      `https://api.coingecko.com/api/v3/simple/price?ids=${assetId}&vs_currencies=usd`,
+      { 
+        headers: { 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(DEFAULT_CONFIG.timeoutMs)
+      }
+    )
+    
     if (!response.ok) {
-      return false
+      throw new Error(`CoinGecko API error: ${response.statusText}`)
     }
-
-    const proofData = await response.json()
-
-    // Recalculate hash
-    const calculatedHash = crypto
-      .createHash('sha256')
-      .update(JSON.stringify(proofData))
-      .digest('hex')
-
-    // Compare hashes (remove 0x prefix if present)
-    const cleanExpectedHash = expectedHash.startsWith('0x')
-      ? expectedHash.slice(2)
-      : expectedHash
-
-    return calculatedHash === cleanExpectedHash
+    
+    const data = await response.json()
+    const price = data[assetId]?.usd
+    
+    if (!price || price <= 0) {
+      throw new Error('Invalid price from CoinGecko')
+    }
+    
+    return {
+      price,
+      sources: [{
+        src: 'coingecko',
+        price,
+        ts: new Date().toISOString(),
+        ok: true
+      }],
+      ok: true
+    }
   } catch (error) {
-    console.error('Proof verification failed:', error)
-    return false
+    return {
+      price: 0,
+      sources: [{
+        src: 'coingecko',
+        price: 0,
+        ts: new Date().toISOString(),
+        ok: false
+      }],
+      ok: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    }
   }
+}
+
+/**
+ * CoinCap API - Free tier
+ */
+async function fetchCoincap(assetId: string): Promise<OracleResult> {
+  try {
+    const response = await fetch(
+      `https://api.coincap.io/v2/assets/${assetId}`,
+      { 
+        headers: { 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(DEFAULT_CONFIG.timeoutMs)
+      }
+    )
+    
+    if (!response.ok) {
+      throw new Error(`CoinCap API error: ${response.statusText}`)
+    }
+    
+    const data = await response.json()
+    const price = parseFloat(data.data?.priceUsd)
+    
+    if (!price || price <= 0) {
+      throw new Error('Invalid price from CoinCap')
+    }
+    
+    return {
+      price,
+      sources: [{
+        src: 'coincap',
+        price,
+        ts: new Date().toISOString(),
+        ok: true
+      }],
+      ok: true
+    }
+  } catch (error) {
+    return {
+      price: 0,
+      sources: [{
+        src: 'coincap',
+        price: 0,
+        ts: new Date().toISOString(),
+        ok: false
+      }],
+      ok: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    }
+  }
+}
+
+/**
+ * CoinPaprika API - Free tier
+ */
+async function fetchPaprika(assetId: string): Promise<OracleResult> {
+  try {
+    const response = await fetch(
+      `https://api.coinpaprika.com/v1/tickers/${assetId}`,
+      { 
+        headers: { 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(DEFAULT_CONFIG.timeoutMs)
+      }
+    )
+    
+    if (!response.ok) {
+      throw new Error(`CoinPaprika API error: ${response.statusText}`)
+    }
+    
+    const data = await response.json()
+    const price = parseFloat(data.quotes?.USD?.price)
+    
+    if (!price || price <= 0) {
+      throw new Error('Invalid price from CoinPaprika')
+    }
+    
+    return {
+      price,
+      sources: [{
+        src: 'paprika',
+        price,
+        ts: new Date().toISOString(),
+        ok: true
+      }],
+      ok: true
+    }
+  } catch (error) {
+    return {
+      price: 0,
+      sources: [{
+        src: 'paprika',
+        price: 0,
+        ts: new Date().toISOString(),
+        ok: false
+      }],
+      ok: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    }
+  }
+}
+
+/**
+ * Binance Public API - No key required
+ */
+async function fetchBinance(symbol: string): Promise<OracleResult> {
+  try {
+    const response = await fetch(
+      `https://api.binance.com/api/v3/ticker/price?symbol=${symbol}USDT`,
+      { 
+        headers: { 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(DEFAULT_CONFIG.timeoutMs)
+      }
+    )
+    
+    if (!response.ok) {
+      throw new Error(`Binance API error: ${response.statusText}`)
+    }
+    
+    const data = await response.json()
+    const price = parseFloat(data.price)
+    
+    if (!price || price <= 0) {
+      throw new Error('Invalid price from Binance')
+    }
+    
+    return {
+      price,
+      sources: [{
+        src: 'binance',
+        price,
+        ts: new Date().toISOString(),
+        ok: true
+      }],
+      ok: true
+    }
+  } catch (error) {
+    return {
+      price: 0,
+      sources: [{
+        src: 'binance',
+        price: 0,
+        ts: new Date().toISOString(),
+        ok: false
+      }],
+      ok: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    }
+  }
+}
+
+/**
+ * Kraken Public API - No key required
+ */
+async function fetchKraken(pair: string): Promise<OracleResult> {
+  try {
+    const response = await fetch(
+      `https://api.kraken.com/0/public/Ticker?pair=${pair}`,
+      { 
+        headers: { 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(DEFAULT_CONFIG.timeoutMs)
+      }
+    )
+    
+    if (!response.ok) {
+      throw new Error(`Kraken API error: ${response.statusText}`)
+    }
+    
+    const data = await response.json()
+    const ticker = data.result?.[pair] || data.result?.[Object.keys(data.result || {})[0]]
+    const price = parseFloat(ticker?.c?.[0])
+    
+    if (!price || price <= 0) {
+      throw new Error('Invalid price from Kraken')
+    }
+    
+    return {
+      price,
+      sources: [{
+        src: 'kraken',
+        price,
+        ts: new Date().toISOString(),
+        ok: true
+      }],
+      ok: true
+    }
+  } catch (error) {
+    return {
+      price: 0,
+      sources: [{
+        src: 'kraken',
+        price: 0,
+        ts: new Date().toISOString(),
+        ok: false
+      }],
+      ok: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    }
+  }
+}
+
+/**
+ * Remove outliers using Median Absolute Deviation (MAD)
+ */
+function trimOutliers(prices: number[]): number[] {
+  if (prices.length <= 2) return prices
+  
+  // Sort prices
+  const sorted = [...prices].sort((a, b) => a - b)
+  
+  // Calculate median
+  const median = sorted.length % 2 === 0
+    ? (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
+    : sorted[Math.floor(sorted.length / 2)]
+  
+  // Calculate MAD
+  const deviations = sorted.map(price => Math.abs(price - median))
+  const mad = deviations.length % 2 === 0
+    ? (deviations[deviations.length / 2 - 1] + deviations[deviations.length / 2]) / 2
+    : deviations[Math.floor(deviations.length / 2)]
+  
+  // Filter outliers (keep prices within 2.5 * MAD of median)
+  const threshold = 2.5 * mad
+  return prices.filter(price => Math.abs(price - median) <= threshold)
+}
+
+/**
+ * Calculate median of an array
+ */
+function median(numbers: number[]): number {
+  if (numbers.length === 0) return 0
+  
+  const sorted = [...numbers].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  
+  return sorted.length % 2 === 0
+    ? (sorted[mid - 1] + sorted[mid]) / 2
+    : sorted[mid]
+}
+
+/**
+ * Main oracle function - fetches price from multiple sources
+ */
+export async function snapshotPriceUSD(
+  assetId: string,
+  symbol?: string,
+  config: Partial<OracleConfig> = {}
+): Promise<PriceSnapshot> {
+  const finalConfig = { ...DEFAULT_CONFIG, ...config }
+  const timestamp = new Date().toISOString()
+  
+  // Map asset IDs to symbols for different APIs
+  const symbolMap: Record<string, string> = {
+    'bonk': 'BONK',
+    'dogwifhat': 'WIF',
+    'pepe': 'PEPE',
+    'solana': 'SOL',
+    'bitcoin': 'BTC',
+    'ethereum': 'ETH'
+  }
+  
+  const apiSymbol = symbol || symbolMap[assetId.toLowerCase()] || assetId.toUpperCase()
+  
+  // Fetch from all sources in parallel
+  const calls = [
+    fetchCoingecko(assetId),
+    fetchCoincap(assetId),
+    fetchPaprika(assetId),
+    fetchBinance(apiSymbol),
+    fetchKraken(`${apiSymbol}USD`)
+  ]
+  
+  try {
+    const results = await Promise.allSettled(calls)
+    const traces: OracleTrace[] = []
+    const prices: number[] = []
+    
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled' && result.value.ok) {
+        traces.push(...result.value.sources)
+        prices.push(result.value.price)
+      } else {
+        // Add failed trace
+        const sourceNames = ['coingecko', 'coincap', 'paprika', 'binance', 'kraken']
+        traces.push({
+          src: sourceNames[index],
+          price: 0,
+          ts: timestamp,
+          ok: false
+        })
+      }
+    })
+    
+    // Check if we have enough sources
+    if (prices.length < 2) {
+      throw new Error('INSUFFICIENT_SOURCES: Less than 2 sources succeeded')
+    }
+    
+    // Remove outliers and calculate median
+    const filteredPrices = trimOutliers(prices)
+    const finalPrice = median(filteredPrices)
+    
+    if (finalPrice <= 0) {
+      throw new Error('INVALID_PRICE: Median price is invalid')
+    }
+    
+    return {
+      price: finalPrice,
+      ts: timestamp,
+      sources: traces
+    }
+    
+  } catch (error) {
+    console.error('Oracle snapshot failed:', error)
+    throw new Error(`Oracle failure: ${error instanceof Error ? error.message : 'Unknown error'}`)
+  }
+}
+
+/**
+ * Retry wrapper with exponential backoff
+ */
+export async function snapshotPriceWithRetry(
+  assetId: string,
+  symbol?: string,
+  maxRetries: number = 3
+): Promise<PriceSnapshot> {
+  let lastError: Error | null = null
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await snapshotPriceUSD(assetId, symbol)
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error('Unknown error')
+      
+      if (attempt < maxRetries - 1) {
+        // Exponential backoff: 1s, 2s, 4s
+        const delay = Math.pow(2, attempt) * 1000
+        await new Promise(resolve => setTimeout(resolve, delay))
+      }
+    }
+  }
+  
+  throw lastError || new Error('All retry attempts failed')
 }

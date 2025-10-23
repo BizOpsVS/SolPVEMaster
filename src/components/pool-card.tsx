@@ -1,128 +1,162 @@
-import type React from "react";
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import type React from "react"
+import { useState } from "react"
+import type { PoolCard as PoolCardType } from "@/types/pve"
+import { Card } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { TrendingUp, TrendingDown, Clock, Target, Zap } from "lucide-react"
+import { Link } from "react-router-dom"
+import { Timer } from "./timer"
+import { StakeModal } from "./stake-modal"
 
-import type { PoolListItem } from "@/types/pve";
-import { lamportsToSol, bpsToPct, pctSplit } from "@/lib/format";
-import { isPoolOpenForEntry, getEffectiveStatus } from "@/lib/pool-utils";
-import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Copy } from "lucide-react";
-import { Timer } from "./timer";
-
-export function PoolCard({ pool }: { pool: PoolListItem }) {
-  const { overPct, underPct } = pctSplit(pool.totals.over, pool.totals.under)
-  const totalSol = lamportsToSol(pool.totals.over + pool.totals.under)
-  const [copied, setCopied] = useState(false)
+export function PoolCard({ pool }: { pool: PoolCardType }) {
+  const [showStakeModal, setShowStakeModal] = useState(false)
   
-  const isOpen = isPoolOpenForEntry(pool.status, pool.lock_ts)
-  const effectiveStatus = getEffectiveStatus(pool.status, pool.lock_ts, pool.end_ts)
+  const isOpen = pool.status === 'OPEN'
+  const isLocked = pool.status === 'LOCKED'
+  const isResolved = pool.status === 'RESOLVED'
+  
+  // Determine the correct route
+  const poolRoute = `/pool/${pool.id}`
 
-  // Determine the correct route based on pool type
-  const poolRoute = pool.pool_type === 'PvAI' ? `/vsai/pool/${pool.id}` : `/vsmarket/pool/${pool.id}`
-
-  const handleCopy = (e: React.MouseEvent) => {
+  const handleStakeClick = (e: React.MouseEvent) => {
     e.preventDefault()
-    navigator.clipboard.writeText(pool.ai.commit)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    e.stopPropagation()
+    if (isOpen) {
+      setShowStakeModal(true)
+    }
+  }
+
+  const handleStakePlaced = () => {
+    // This could trigger a refresh of pool data
+    console.log("Stake placed successfully!")
   }
 
   return (
-    <Link to={poolRoute}>
-      <Card className="p-6 bg-card border-[#1F2A44] rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.35)] hover:ring-2 hover:ring-aqua/50 transition-all duration-300 cursor-pointer group">
-        <div className="flex items-start justify-between mb-4">
+    <Card className="group relative overflow-hidden bg-slate-800/50 border-slate-700/50 rounded-xl hover:bg-slate-700/50 transition-all duration-300 hover:shadow-lg hover:shadow-cyan-500/10">
+      <Link to={poolRoute} className="block p-6">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-neon-purple/20 to-aqua/20 flex items-center justify-center font-mono text-sm font-bold border border-border">
-              {pool.token.slice(0, 2)}
+            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-cyan-500/20 to-purple-500/20 flex items-center justify-center border border-cyan-500/30">
+              <span className="text-lg font-bold text-cyan-400">{pool.asset_symbol.slice(0, 2)}</span>
             </div>
             <div>
-              <h3 className="font-bold text-lg tracking-tight">{pool.token}</h3>
+              <h3 className="font-bold text-lg text-white">{pool.asset_symbol}</h3>
+              <p className="text-sm text-slate-400">
+                {pool.duration} Pool
+              </p>
             </div>
           </div>
           <Badge
-            variant={isOpen ? "default" : effectiveStatus === "LOCKED" ? "secondary" : "outline"}
+            variant={isOpen ? "default" : isLocked ? "secondary" : "outline"}
             className={
               isOpen
-                ? "bg-neon-green/10 text-neon-green border-neon-green/20"
-                : effectiveStatus === "LOCKED"
-                  ? "bg-yellow/10 text-yellow border-yellow/20"
-                  : "bg-muted/10 text-muted-foreground border-muted/20"
+                ? "bg-green-500/20 text-green-400 border-green-500/30"
+                : isLocked
+                  ? "bg-yellow-500/20 text-yellow-400 border-yellow-500/30"
+                  : "bg-slate-500/20 text-slate-400 border-slate-500/30"
             }
           >
-            {effectiveStatus}
+            {pool.status}
           </Badge>
         </div>
 
-        <div className="space-y-3 mb-4">
-          {pool.pool_type === 'PvAI' ? (
-            <>
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">AI Line</span>
-                <span className="font-bold font-mono text-aqua">{bpsToPct(pool.line_bps)}</span>
-              </div>
-
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Confidence</span>
-                <span className="font-bold font-mono">{(pool.confidence * 100).toFixed(0)}%</span>
-              </div>
-
-              <div className="text-xs text-muted-foreground">Model {pool.ai?.model || 'N/A'}</div>
-            </>
-          ) : (
-            <>
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Type</span>
-                <span className="font-bold font-mono text-neon-green">VS Market</span>
-              </div>
-
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Pool Size</span>
-                <span className="font-bold font-mono">{totalSol} SOL</span>
-              </div>
-            </>
-          )}
-        </div>
-
-        <div className="mb-4">
-          <div className="flex h-8 rounded-md overflow-hidden mb-2 border border-border/50">
-            <div
-              className="bg-aqua/20 border-r-2 border-aqua flex items-center justify-center text-xs font-semibold text-aqua"
-              style={{ width: `${overPct}%` }}
-            >
-              {overPct > 15 && `${overPct}%`}
+        {/* AI Line & Confidence */}
+        <div className="mb-4 p-4 rounded-lg bg-gradient-to-r from-cyan-500/10 to-purple-500/10 border border-cyan-500/20">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <Target className="h-4 w-4 text-cyan-400" />
+              <span className="text-sm text-slate-300">AI Line</span>
             </div>
-            <div
-              className="bg-neon-purple/20 border-l-2 border-neon-purple flex items-center justify-center text-xs font-semibold text-neon-purple"
-              style={{ width: `${underPct}%` }}
-            >
-              {underPct > 15 && `${underPct}%`}
-            </div>
+            <span className="text-lg font-bold text-cyan-400 font-mono">+{pool.ai_line_pct.toFixed(1)}%</span>
           </div>
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-aqua font-semibold">Over Pool</span>
-            <span className="font-mono text-muted-foreground">{totalSol} SOL</span>
-            <span className="text-neon-purple font-semibold">Under Pool</span>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Zap className="h-4 w-4 text-purple-400" />
+              <span className="text-sm text-slate-300">Confidence</span>
+            </div>
+            <span className="text-sm font-bold text-purple-400 font-mono">{pool.confidence_pct}%</span>
           </div>
         </div>
 
-        {pool.pool_type === 'PvAI' && pool.ai?.commit && (
-          <div className="flex items-center justify-between mb-3">
-            <button
-              onClick={handleCopy}
-              className="flex items-center gap-1.5 text-xs font-mono text-muted-foreground hover:text-foreground transition-colors group/copy"
-            >
-              <span className="truncate max-w-[120px]">
-                {pool.ai.commit.slice(0, 6)}...{pool.ai.commit.slice(-4)}
-              </span>
-              <Copy className="h-3 w-3 opacity-0 group-hover/copy:opacity-100 transition-opacity" />
-            </button>
-            {copied && <span className="text-xs text-neon-green">Copied!</span>}
+        {/* Pool Stats */}
+        <div className="mb-4 space-y-3">
+          {/* Over/Under Distribution */}
+          <div className="space-y-2">
+            <div className="flex h-6 rounded-lg overflow-hidden border border-slate-600/50">
+              <div
+                className="bg-gradient-to-r from-cyan-500/30 to-cyan-400/30 flex items-center justify-center text-xs font-semibold text-cyan-300"
+                style={{ width: `${pool.over_pct || 50}%` }}
+              >
+                {pool.over_pct && pool.over_pct > 20 && `${pool.over_pct.toFixed(0)}%`}
+              </div>
+              <div
+                className="bg-gradient-to-r from-purple-500/30 to-purple-400/30 flex items-center justify-center text-xs font-semibold text-purple-300"
+                style={{ width: `${pool.under_pct || 50}%` }}
+              >
+                {pool.under_pct && pool.under_pct > 20 && `${pool.under_pct.toFixed(0)}%`}
+              </div>
+            </div>
+            <div className="flex items-center justify-between text-xs">
+              <div className="flex items-center gap-1">
+                <TrendingUp className="h-3 w-3 text-cyan-400" />
+                <span className="text-cyan-400 font-semibold">Over</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <TrendingDown className="h-3 w-3 text-purple-400" />
+                <span className="text-purple-400 font-semibold">Under</span>
+              </div>
+            </div>
           </div>
-        )}
+        </div>
 
-        <Timer lockTs={pool.lock_ts} endTs={pool.end_ts} status={effectiveStatus} />
-      </Card>
-    </Link>
+        {/* Action Buttons */}
+        <div className="flex gap-2 mb-4">
+          <Button 
+            className="flex-1 bg-gradient-to-r from-cyan-500 to-cyan-600 hover:from-cyan-600 hover:to-cyan-700 text-white rounded-lg"
+            size="sm"
+            disabled={!isOpen}
+            onClick={handleStakeClick}
+          >
+            Over
+          </Button>
+          <Button 
+            className="flex-1 bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white rounded-lg"
+            size="sm"
+            disabled={!isOpen}
+            onClick={handleStakeClick}
+          >
+            Under
+          </Button>
+        </div>
+
+        {/* Timer */}
+        <div className="flex items-center justify-between text-sm">
+          <div className="flex items-center gap-2 text-slate-400">
+            <Clock className="h-4 w-4" />
+            <Timer 
+              lockTs={Math.floor(new Date(pool.lock_at).getTime() / 1000)} 
+              endTs={Math.floor(new Date(pool.resolve_at).getTime() / 1000)} 
+              status={pool.status} 
+            />
+          </div>
+          <div className="text-xs text-slate-500">
+            {pool.duration}
+          </div>
+        </div>
+      </Link>
+      
+      {/* Stake Modal */}
+      {showStakeModal && (
+        <StakeModal
+          poolId={pool.id}
+          poolSymbol={pool.asset_symbol}
+          aiLine={pool.ai_line_pct}
+          onClose={() => setShowStakeModal(false)}
+          onStakePlaced={handleStakePlaced}
+        />
+      )}
+    </Card>
   )
 }
